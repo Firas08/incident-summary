@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ * Datamodel extension for incident-summary module.
+ *
+ * Extends the Server class with two new read-only computed attributes:
+ * - open_incident_count: number of currently open Incidents linked to this Server
+ * - last_incident_date: start date of the most recent open Incident linked to this Server
+ *
+ * These fields are automatically updated by the Hook in main.incident-summary.php.
+ * The Server class is defined in itop-config-mgmt module — we extend it without modifying core files.
+-->
+<itop_design xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.6">
+    <classes>
+        <!-- We extend the existing Server class without recreating it -->
+        <class id="Server" _delta="must_exist">
+            <fields>
+                <!-- Counter of open Incidents linked to this Server -->
+                <!-- Automatically updated by the Hook on every Incident CRUD event -->
+                <field id="open_incident_count" xsi:type="AttributeInteger" _delta="define">
+                    <sql>open_incident_count</sql>
+                    <label>Open Incidents</label>
+                    <default_value>0</default_value>
+                    <is_null_allowed>true</is_null_allowed>
+                    <validation_pattern/>
+                    <!-- The row turns red in list view when the counter is greater than 0 -->
+                    <highlight>
+                        <rule id="open_incidents_high" _delta="define">
+                            <rank>10</rank>
+                            <color>red</color>
+                            <!-- &gt; is the XML encoding for the > character -->
+                            <condition>open_incident_count &gt; 0</condition>
+                        </rule>
+                    </highlight>
+                </field>
+
+                <!-- Date of the most recent open Incident linked to this Server — null if no open Incidents -->
+                <field id="last_incident_date" xsi:type="AttributeDateTime" _delta="define">
+                    <sql>last_incident_date</sql>
+                    <label>Last Incident Date</label>
+                    <default_value/>
+                    <is_null_allowed>true</is_null_allowed>
+                </field>
+            </fields>
+
+            <presentation>
+                <!-- Details view: fields displayed when opening a single Server object -->
+                <details>
+                    <items>
+                        <!-- col:col1 and fieldset:Server:baseinfo already exist — we only add our fields inside -->
+                        <item id="col:col1" _delta="must_exist">
+                            <items>
+                                <item id="fieldset:Server:baseinfo" _delta="must_exist">
+                                    <items>
+                                        <!-- rank 999 and 1000 place the fields at the bottom of General information section -->
+                                        <item id="open_incident_count" _delta="define">
+                                            <rank>999</rank>
+                                        </item>
+                                        <item id="last_incident_date" _delta="define">
+                                            <rank>1000</rank>
+                                        </item>
+                                    </items>
+                                </item>
+                            </items>
+                        </item>
+                    </items>
+                </details>
+
+                <!-- Search view: fields available as filters when searching for Servers -->
+                <search>
+                    <items>
+                        <item id="open_incident_count" _delta="define">
+                            <rank>999</rank>
+                        </item>
+                        <item id="last_incident_date" _delta="define">
+                            <rank>1000</rank>
+                        </item>
+                    </items>
+                </search>
+
+                <!-- List view: columns displayed in the Server list -->
+                <list>
+                    <items>
+                        <item id="open_incident_count" _delta="define">
+                            <rank>999</rank>
+                        </item>
+                        <item id="last_incident_date" _delta="define">
+                            <rank>1000</rank>
+                        </item>
+                    </items>
+                </list>
+            </presentation>
+        </class>
+    </classes>
+</itop_design>
