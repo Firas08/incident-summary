@@ -1,166 +1,223 @@
 <?php
 
 /**
- * IncidentSummaryHook
+ * Business helper for the incident-summary extension.
  *
- * This class listens to iTop CRUD events on Incident objects and automatically
- * updates the open_incident_count and last_incident_date fields on linked Servers.
+ * This class contains the calculation logic used by the module.
+ * It is responsible for:
+ * - detecting which CIs must be recalculated
+ * - counting open incidents linked to a CI
+ * - updating the calculated fields on the target CI classes
  *
- * It implements the iApplicationObjectExtension interface which is the official
- * iTop mechanism for hooking into object lifecycle events.
+ * No iTop core file is modified.
  */
-class IncidentSummaryHook implements iApplicationObjectExtension
+class IncidentSummaryHelper
 {
     /**
-     * Required by the interface — not used in this extension.
+     * List of CI classes handled by the extension.
+     *
+     * The same incident summary logic is applied to:
+     * - Server
+     * - ApplicationSolution
      */
-    public function OnIsModified($oObject)
-    {
-        return false;
-    }
+    private static array $aTargetClasses = array(
+        'Server',
+        'ApplicationSolution',
+    );
 
     /**
-     * Required by the interface — no write restrictions added.
+     * Main entry point called by the iTop hook class.
+     *
+     * Depending on the object that changed, the method decides what must be recalculated:
+     * - if an Incident changed, all linked CIs are recalculated
+     * - if a link between a Ticket and a FunctionalCI changed, the linked CI is recalculated
+     *
+     * @param mixed $oObject The iTop object that has been inserted, updated or deleted.
      */
-    public function OnCheckToWrite($oObject)
+    public static function HandleObjectChange($oObject): void
     {
-        return array();
-    }
-
-    /**
-     * Required by the interface — no delete restrictions added.
-     */
-    public function OnCheckToDelete($oObject)
-    {
-        return array();
-    }
-
-    /**
-     * Triggered after an object is created in the database.
-     * Updates the Server counter when a new Incident is created.
-     */
-    public function OnDBInsert($oObject, $oChange = null)
-    {
-        $this->UpdateServerCount($oObject);
-    }
-
-    /**
-     * Triggered after an object is updated in the database.
-     * Updates the Server counter when an Incident status changes (e.g. resolved/closed).
-     */
-    public function OnDBUpdate($oObject, $oChange = null)
-    {
-        $this->UpdateServerCount($oObject);
-    }
-
-    /**
-     * Triggered before an object is deleted from the database.
-     * We must retrieve linked Servers BEFORE deletion because after deletion
-     * the lnkFunctionalCIToTicket link will no longer exist.
-     */
-    public function OnDBDelete($oObject, $oChange = null)
-    {
-        // Check that the object is an Incident
-        if (!($oObject instanceof Incident)) {
+        if ($oObject === null) {
             return;
         }
 
-        $iTicketId = $oObject->GetKey();
+        $sClass = get_class($oObject);
 
-        // Retrieve all Servers linked to this Incident BEFORE deletion
-        $sOQL = "SELECT Server AS s JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = s.id WHERE l.ticket_id = :ticket_id";
-        $oSearch = DBObjectSearch::FromOQL($sOQL);
-        $oSet = new DBObjectSet($oSearch, array(), array('ticket_id' => $iTicketId));
-
-        // Store Server IDs to process them after deletion
-        $aServerIds = array();
-        while ($oServer = $oSet->Fetch()) {
-            $aServerIds[] = $oServer->GetKey();
+        /*
+         * Case 1:
+         * An incident has been created, updated, resolved, closed or deleted.
+         * In this case, all CIs linked to this incident must be recalculated.
+         */
+        if ($sClass === 'Incident') {
+            self::UpdateLinkedCIsForIncident($oObject->GetKey());
+            return;
         }
 
-        // For each linked Server, recalculate the counter excluding the deleted Incident
-        foreach ($aServerIds as $iServerId) {
-            $oServer = MetaModel::GetObject('Server', $iServerId, false);
-            if (!is_null($oServer)) {
+        /*
+         * Case 2:
+         * A relation between a ticket and a configuration item has changed.
+         * This happens when a CI is linked to or unlinked from a ticket.
+         */
+        if ($sClass === 'lnkFunctionalCIToTicket') {
+            $iCIId = $oObject->Get('functionalci_id');
+            self::UpdateCIById($iCIId);
+            return;
+        }
+    }
 
-                // Count open Incidents excluding the one being deleted
-                $sCountOQL = "SELECT Incident AS i JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id WHERE l.functionalci_id = :server_id AND i.status NOT IN ('resolved', 'closed') AND i.id != :incident_id";
-                $oCountSearch = DBObjectSearch::FromOQL($sCountOQL);
-                $oCountSet = new DBObjectSet($oCountSearch, array(), array('server_id' => $iServerId, 'incident_id' => $iTicketId));
-                $iCount = $oCountSet->Count();
-                $oServer->Set('open_incident_count', $iCount);
+    /**
+     * Recalculate all target CIs linked to a given incident.
+     *
+     * iTop stores the relation between Tickets and FunctionalCIs in the
+     * lnkFunctionalCIToTicket link class.
+     *
+     * @param int $iIncidentId Identifier of the incident to process.
+     */
+    private static function UpdateLinkedCIsForIncident(int $iIncidentId): void
+    {
+        if ($iIncidentId <= 0) {
+            return;
+        }
 
-                // Retrieve the most recent open Incident date excluding the one being deleted
-                $sDateOQL = "SELECT Incident AS i JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id WHERE l.functionalci_id = :server_id AND i.status NOT IN ('resolved', 'closed') AND i.id != :incident_id";
-                $oDateSearch = DBObjectSearch::FromOQL($sDateOQL);
-                $oDateSet = new DBObjectSet($oDateSearch, array('start_date' => false), array('server_id' => $iServerId, 'incident_id' => $iTicketId));
-                $oDateSet->SetLimit(1);
-                $oLastIncident = $oDateSet->Fetch();
+        /*
+         * OQL query:
+         * Retrieve all FunctionalCIs linked to the given incident.
+         */
+        $sOQL = "
+            SELECT FunctionalCI AS ci
+            JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = ci.id
+            WHERE l.ticket_id = :ticket_id
+        ";
 
-                // Update the date set to null if no open Incidents remain
-                if (!is_null($oLastIncident)) {
-                    $oServer->Set('last_incident_date', $oLastIncident->Get('start_date'));
-                } else {
-                    $oServer->Set('last_incident_date', null);
+        $oSearch = DBObjectSearch::FromOQL($sOQL);
+        $oSet = new DBObjectSet($oSearch, array(), array(
+            'ticket_id' => $iIncidentId,
+        ));
+
+        while ($oCI = $oSet->Fetch()) {
+            self::UpdateCI($oCI);
+        }
+    }
+
+    /**
+     * Load a CI by its identifier and recalculate its incident summary.
+     *
+     * This method is mainly used when the link between a ticket and a CI changes.
+     *
+     * @param mixed $iCIId Identifier of the FunctionalCI.
+     */
+    private static function UpdateCIById($iCIId): void
+    {
+        if (empty($iCIId)) {
+            return;
+        }
+
+        try {
+            $oCI = MetaModel::GetObject('FunctionalCI', $iCIId, false);
+
+            if ($oCI === null) {
+                return;
+            }
+
+            self::UpdateCI($oCI);
+        } catch (Exception $e) {
+            IssueLog::Error('incident-summary: unable to load CI '.$iCIId.' - '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Recalculate the incident summary for one CI.
+     *
+     * The method:
+     * - checks if the CI class is supported by the extension
+     * - counts open incidents linked to the CI
+     * - retrieves the date of the latest open incident
+     * - updates the calculated fields only if the values changed
+     *
+     * An incident is considered open when its status is neither:
+     * - resolved
+     * - closed
+     *
+     * @param mixed $oCI The CI object to recalculate.
+     */
+    private static function UpdateCI($oCI): void
+    {
+        if ($oCI === null) {
+            return;
+        }
+
+        $sClass = get_class($oCI);
+
+        /*
+         * Ignore all CI classes that are not part of the exercise scope.
+         */
+        if (!in_array($sClass, self::$aTargetClasses, true)) {
+            return;
+        }
+
+        $iCIId = $oCI->GetKey();
+
+        /*
+         * OQL query:
+         * Retrieve all open incidents linked to the current CI.
+         *
+         * Closed incidents are excluded with:
+         * - status != resolved
+         * - status != closed
+         */
+        $sOQL = "
+            SELECT Incident AS i
+            JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id
+            WHERE l.functionalci_id = :ci_id
+            AND i.status != 'resolved'
+            AND i.status != 'closed'
+        ";
+
+        $oSearch = DBObjectSearch::FromOQL($sOQL);
+        $oSet = new DBObjectSet($oSearch, array(), array(
+            'ci_id' => $iCIId,
+        ));
+
+        $iCount = 0;
+        $sLastIncidentDate = null;
+
+        /*
+         * Count open incidents and keep the latest incident start date.
+         */
+        while ($oIncident = $oSet->Fetch()) {
+            $iCount++;
+
+            $sDate = $oIncident->Get('start_date');
+
+            if (!empty($sDate)) {
+                if ($sLastIncidentDate === null || $sDate > $sLastIncidentDate) {
+                    $sLastIncidentDate = $sDate;
                 }
-
-                $oServer->DBUpdate();
             }
         }
-    }
 
-    /**
-     * Core business logic called by OnDBInsert and OnDBUpdate.
-     * Finds all Servers linked to the Incident and updates their counters.
-     */
-    private function UpdateServerCount($oObject)
-    {
-        // Check that the object is an Incident
-        if (!($oObject instanceof Incident)) {
-            return;
+        $bChanged = false;
+
+        /*
+         * Update the incident counter only if the value has changed.
+         */
+        if ($oCI->Get('open_incident_count') != $iCount) {
+            $oCI->Set('open_incident_count', $iCount);
+            $bChanged = true;
         }
 
-        $iTicketId = $oObject->GetKey();
-        if (empty($iTicketId)) {
-            return;
+        /*
+         * Update the latest incident date only if the value has changed.
+         */
+        if ($oCI->Get('last_incident_date') != $sLastIncidentDate) {
+            $oCI->Set('last_incident_date', $sLastIncidentDate);
+            $bChanged = true;
         }
 
-        // Retrieve all Servers linked to this Incident via the join table
-        $sOQL = "SELECT Server AS s JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = s.id WHERE l.ticket_id = :ticket_id";
-        $oSearch = DBObjectSearch::FromOQL($sOQL);
-        $oSet = new DBObjectSet($oSearch, array(), array('ticket_id' => $iTicketId));
-
-        // For each linked Server, recalculate the counter and the date
-        while ($oServer = $oSet->Fetch()) {
-            $iServerId = $oServer->GetKey();
-
-            // Count open Incidents linked to this Server using OQL
-
-            // Requête OQL pour compter les Incidents ouverts liés à ce Server via la table de liaison
-            $sCountOQL = "SELECT Incident AS i JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id WHERE l.functionalci_id = :server_id AND i.status NOT IN ('resolved', 'closed')";
-            // Création de l'objet de recherche à partir de la requête OQL
-            $oCountSearch = DBObjectSearch::FromOQL($sCountOQL);
-            // Exécution de la requête avec le paramètre server_id
-            $oCountSet = new DBObjectSet($oCountSearch, array(), array('server_id' => $iServerId));
-            $iCount = $oCountSet->Count(); // Comptage du nombre de résultats retournés
-            $oServer->Set('open_incident_count', $iCount); // Mise à jour du compteur sur l'objet Server en mémoire
-
-            // Retrieve the most recent open Incident date sorted by start_date descending
-            $sDateOQL = "SELECT Incident AS i JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id WHERE l.functionalci_id = :server_id AND i.status NOT IN ('resolved', 'closed')";
-            $oDateSearch = DBObjectSearch::FromOQL($sDateOQL);
-            $oDateSet = new DBObjectSet($oDateSearch, array('start_date' => false), array('server_id' => $iServerId));
-            $oDateSet->SetLimit(1);
-            $oLastIncident = $oDateSet->Fetch();
-
-            // Update the date set to null if no open Incidents exist
-            if (!is_null($oLastIncident)) {
-                $oServer->Set('last_incident_date', $oLastIncident->Get('start_date'));
-            } else {
-                $oServer->Set('last_incident_date', null);
-            }
-
-            // Save the updated Server to the database
-            $oServer->DBUpdate();
+        /*
+         * Avoid unnecessary database updates.
+         */
+        if ($bChanged) {
+            $oCI->DBUpdate();
         }
     }
 }
