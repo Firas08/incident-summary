@@ -1,0 +1,212 @@
+{
+  "name": "iTop Incident AI Analysis",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "itop-incident-ai",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "1ce8aef3-d87a-4ecb-a117-aaec46dd2ac2",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "af15bbdb-15f0-489c-98c0-a196ebdbd0ec"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost/itop/webservices/rest.php?version=1.3",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "auth_user",
+              "value": "=itop"
+            },
+            {
+              "name": "auth_pwd",
+              "value": "=password"
+            },
+            {
+              "name": "=json_data",
+              "value": "={\"operation\":\"core/get\",\"class\":\"Incident\",\"key\":\"SELECT Incident WHERE id = {{ $json.body.incident_id }}\",\"output_fields\":\"id,ref,title,description,status,start_date\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "67e75ce5-948b-4846-91cd-60640089ca6c",
+      "name": "GET Incident iTop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const objects = $json.objects;\nconst key = Object.keys(objects)[0];\nconst incident = objects[key].fields;\n\nconst prompt = `Tu es un expert ITSM. Analyse cet incident iTop et reponds en francais.\n\nTitre : ${incident.title}\nDescription : ${incident.description || 'Non renseignee'}\nStatut : ${incident.status}\nDate de debut : ${incident.start_date}\n\nReponds avec ce format exact :\nResume : (1 phrase courte)\nCause probable : (1 phrase)\nPriorite suggeree : (Critique / Haute / Moyenne / Basse)\nAction recommandee : (1 phrase)`;\n\nreturn {\n  incident_id: $('Webhook').item.json.body.incident_id,\n  incident_ref: incident.ref || '',\n  incident_title: incident.title || '',\n  incident_status: incident.status || '',\n  prompt: prompt\n};"
+      },
+      "id": "0cfe2964-9c37-45d4-89b1-082580beb697",
+      "name": "Prepare Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse =\n  $json.choices?.[0]?.message?.content\n  || 'Analyse non disponible';\n\nconst incidentId = $('Prepare Prompt').first().json.incident_id;\n\nreturn [\n  {\n    json: {\n      incident_id: incidentId,\n      ai_analysis: aiResponse,\n      json_data: JSON.stringify({\n        operation: 'core/update',\n        class: 'Incident',\n        key: incidentId,\n        fields: {\n          ai_analysis: aiResponse\n        },\n        comment: 'Analyse IA générée automatiquement par n8n'\n      })\n    }\n  }\n];"
+      },
+      "id": "8f7b9297-b385-4c74-ad7f-b6e7bbd0a91c",
+      "name": "Prepare Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost/itop/webservices/rest.php?version=1.3",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "auth_user",
+              "value": "itop"
+            },
+            {
+              "name": "auth_pwd",
+              "value": "password"
+            },
+            {
+              "name": "json_data",
+              "value": "={{ $json.json_data }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c93a1e29-a91e-401e-83cf-987d67dfbba0",
+      "name": "UPDATE Incident iTop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={   \"model\": \"llama-3.3-70b-versatile\",   \"messages\": [     {       \"role\": \"user\",       \"content\": {{ JSON.stringify($json.prompt) }}     }   ] }",
+        "options": {}
+      },
+      "id": "10d2971b-b002-4d9e-b04b-655949e43902",
+      "name": "Groq AI Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "GET Incident iTop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Incident iTop": {
+      "main": [
+        [
+          {
+            "node": "Prepare Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Prompt": {
+      "main": [
+        [
+          {
+            "node": "Groq AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Update": {
+      "main": [
+        [
+          {
+            "node": "UPDATE Incident iTop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Prepare Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "895cf489-fbac-4b22-89a1-acdc7775b7c7",
+  "meta": {
+    "instanceId": "deac857b91ddcabe866d20eabd59b83f8bf832ec332b7811d71a8093e204fd1c"
+  },
+  "id": "PGuFvGTDvRcMiPMP",
+  "tags": []
+}
