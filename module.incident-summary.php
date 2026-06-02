@@ -38,13 +38,12 @@ SetupWebPage::AddModule(
 
         /*
          * PHP files loaded by iTop for this module.
+         * Dictionary files are loaded automatically by iTop from the dictionaries/ folder.
          */
         'datamodel' => array(
+            'datamodel.incident-summary.xml',
             'model.incident-summary.php',
             'main.incident-summary.php',
-            'dictionaries/de.dict.incident-summary.php',
-            'dictionaries/en.dict.incident-summary.php',
-            'dictionaries/fr.dict.incident-summary.php',
         ),
 
         /*
