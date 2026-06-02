@@ -65,12 +65,12 @@ class IncidentSummaryHelper
 
 
     /**
-     * Recalculate all target CIs linked to a given incident.
+     * Recalculate all CIs linked to a given incident.
      *
-     * iTop stores the relation between Tickets and FunctionalCIs in the
-     * lnkFunctionalCIToTicket link class.
-     *
-     * @param int $iIncidentId Identifier of the incident to process.
+     * Optimisation:
+     * - Single OQL query
+     * - Deduplication to avoid recalculating same CI multiple times
+     * - No unnecessary object loading before filtering class
      */
     private static function UpdateLinkedCIsForIncident(int $iIncidentId): void
     {
@@ -79,23 +79,56 @@ class IncidentSummaryHelper
         }
 
         /*
-         * OQL query:
-         * Retrieve all FunctionalCIs linked to the given incident.
+         * Retrieve all FunctionalCI links for this incident only
+         * (iTop handles joins internally via lnkFunctionalCIToTicket)
          */
         $sOQL = "
-            SELECT FunctionalCI AS ci
-            JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = ci.id
-            WHERE l.ticket_id = :ticket_id
-        ";
+        SELECT lnkFunctionalCIToTicket AS l
+        WHERE l.ticket_id = :ticket_id
+    ";
 
-        $oSearch = DBObjectSearch::FromOQL($sOQL); // bereitet die OQL Abfrage vor
-        $oSet = new DBObjectSet($oSearch, array(), array(
-            'ticket_id' => $iIncidentId,
-        ));  // führt die Abfrage aus, die Ergebnisse sind bereit aber noch nicht gelesen
+        $oSearch = DBObjectSearch::FromOQL($sOQL);
+        $oSet = new DBObjectSet(
+            $oSearch,
+            array(),
+            array('ticket_id' => $iIncidentId)
+        );
 
+        /*
+         * Deduplication:
+         * Prevent recalculating same CI multiple times
+         */
+        $aSeen = array();
 
-        while ($oCI = $oSet->Fetch()) {
-            self::UpdateCI($oCI); // liest jeden CI die verknüpft mit incident ist  einzeln
+        while ($oLink = $oSet->Fetch()) {
+
+            $iCI = $oLink->Get('functionalci_id');
+
+            if (empty($iCI) || isset($aSeen[$iCI])) {
+                continue;
+            }
+
+            $aSeen[$iCI] = true;
+
+            /*
+             * Load CI
+             */
+            $oCI = MetaModel::GetObject('FunctionalCI', $iCI, false);
+            if ($oCI === null) {
+                continue;
+            }
+
+            /*
+             * Only supported CI classes
+             */
+            if (!in_array(get_class($oCI), self::$aTargetClasses, true)) {
+                continue;
+            }
+
+            /*
+             * Recalculate
+             */
+            self::UpdateCI($oCI);
         }
     }
 
