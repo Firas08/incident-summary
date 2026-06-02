@@ -34,13 +34,13 @@ class IncidentSummaryHelper
      *
      * @param mixed $oObject The iTop object that has been inserted, updated or deleted.
      */
-    public static function HandleObjectChange($oObject): void
+    public static function HandleObjectChange($oObject): void // itop ruft diese funktion wenn ein objekt geändert oder gelöcht ist
     {
         if ($oObject === null) {
             return;
         }
 
-        $sClass = get_class($oObject);
+        $sClass = get_class($oObject); // ob ein Server oder lnkFunctionalCIToTicket
 
         /*
          * Case 1:
@@ -48,7 +48,7 @@ class IncidentSummaryHelper
          * In this case, all CIs linked to this incident must be recalculated.
          */
         if ($sClass === 'Incident') {
-            self::UpdateLinkedCIsForIncident($oObject->GetKey());
+            self::UpdateLinkedCIsForIncident($oObject->GetKey()); // get the id of the incident und ruft alle verknüpften CIs die mit diese Incident verbunden sind und ruft updateLinked.. um zu berchnen
             return;
         }
 
@@ -58,11 +58,11 @@ class IncidentSummaryHelper
          * This happens when a CI is linked to or unlinked from a ticket.
          */
         if ($sClass === 'lnkFunctionalCIToTicket') {
-            $iCIId = $oObject->Get('functionalci_id');
-            self::UpdateCIById($iCIId);
-            return;
+            $iCIId = $oObject->Get('functionalci_id');  // holt die ID des verknüpften CI aus diesem Link
+            self::UpdateCIById($iCIId);  // ruft UpdateCIById auf für diesen CI
         }
     }
+
 
     /**
      * Recalculate all target CIs linked to a given incident.
@@ -88,13 +88,14 @@ class IncidentSummaryHelper
             WHERE l.ticket_id = :ticket_id
         ";
 
-        $oSearch = DBObjectSearch::FromOQL($sOQL);
+        $oSearch = DBObjectSearch::FromOQL($sOQL); // bereitet die OQL Abfrage vor
         $oSet = new DBObjectSet($oSearch, array(), array(
             'ticket_id' => $iIncidentId,
-        ));
+        ));  // führt die Abfrage aus, die Ergebnisse sind bereit aber noch nicht gelesen
+
 
         while ($oCI = $oSet->Fetch()) {
-            self::UpdateCI($oCI);
+            self::UpdateCI($oCI); // liest jeden CI die verknüpft mit incident ist  einzeln
         }
     }
 
