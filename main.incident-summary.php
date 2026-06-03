@@ -1,13 +1,40 @@
 <?php
 
+/**
+ * Business helper for the incident-summary extension.
+ *
+ * This class contains the calculation logic used by the module.
+ * It is responsible for:
+ * - detecting which CIs must be recalculated
+ * - counting open incidents linked to a CI
+ * - updating the calculated fields on the target CI classes
+ *
+ * No iTop core file is modified.
+ */
 class IncidentSummaryHelper
 {
+    /**
+     * List of CI classes handled by the extension.
+     *
+     * The same incident summary logic is applied to:
+     * - Server
+     * - ApplicationSolution
+     */
     private static array $aTargetClasses = array(
         'Server',
         'ApplicationSolution',
     );
 
-    public static function HandleObjectChange($oObject): void
+    /**
+     * Main entry point called by the iTop hook class.
+     *
+     * Depending on the object that changed, the method decides what must be recalculated:
+     * - if an Incident changed, all linked CIs are recalculated
+     * - if a link between a Ticket and a FunctionalCI changed, the linked CI is recalculated
+     *
+     * @param mixed $oObject The iTop object that has been inserted, updated or deleted.
+     */
+    public static function HandleObjectChange(mixed $oObject): void
     {
         if ($oObject === null) {
             return;
@@ -26,6 +53,14 @@ class IncidentSummaryHelper
         }
     }
 
+    /**
+     * Recalculate all target CIs linked to a given incident.
+     *
+     * iTop stores the relation between Tickets and FunctionalCIs in the
+     * lnkFunctionalCIToTicket link class.
+     *
+     * @param int $iIncidentId Identifier of the incident to process.
+     */
     private static function UpdateLinkedCIsForIncident(int $iIncidentId): void
     {
         if ($iIncidentId <= 0) {
@@ -48,7 +83,14 @@ class IncidentSummaryHelper
         }
     }
 
-    private static function UpdateCIById($iCIId): void
+    /**
+     * Load a CI by its identifier and recalculate its incident summary.
+     *
+     * This method is mainly used when the link between a ticket and a CI changes.
+     *
+     * @param mixed $iCIId Identifier of the FunctionalCI.
+     */
+    private static function UpdateCIById(mixed $iCIId): void
     {
         if (empty($iCIId)) {
             return;
@@ -67,7 +109,22 @@ class IncidentSummaryHelper
         }
     }
 
-    private static function UpdateCI($oCI): void
+    /**
+     * Recalculate the incident summary for one CI.
+     *
+     * The method:
+     * - checks if the CI class is supported by the extension
+     * - counts open incidents linked to the CI
+     * - retrieves the date of the latest open incident
+     * - updates the calculated fields only if the values changed
+     *
+     * An incident is considered open when its status is neither:
+     * - resolved
+     * - closed
+     *
+     * @param mixed $oCI The CI object to recalculate.
+     */
+    private static function UpdateCI(mixed $oCI): void
     {
         if ($oCI === null) {
             return;
@@ -125,8 +182,20 @@ class IncidentSummaryHelper
     }
 }
 
+/**
+ * iTop extension class for the incident-summary module.
+ *
+ * Uses the iTop 3.x EventService mechanism instead of the legacy
+ * AbstractApplicationObjectExtension for object lifecycle hooks.
+ * As recommended by the iTop documentation, EVENT_DB_ABOUT_TO_DELETE
+ * is used instead of EVENT_DB_AFTER_DELETE.
+ */
 class IncidentSummaryExtension implements iBackofficeStyleExtension, iBackofficeReadyScriptExtension
 {
+    /**
+     * Register the EventService listeners for object lifecycle events.
+     * Called once during iTop startup.
+     */
     public static function RegisterListeners(): void
     {
         EventService::RegisterListener(
@@ -134,7 +203,10 @@ class IncidentSummaryExtension implements iBackofficeStyleExtension, iBackoffice
             function (EventData $oEventData) {
                 $oObject = $oEventData->Get('object');
                 IncidentSummaryHelper::HandleObjectChange($oObject);
-            }
+            },
+            null,
+            0,
+            'incident-summary'
         );
 
         // EVENT_DB_ABOUT_TO_DELETE recommended over EVENT_DB_AFTER_DELETE
@@ -144,10 +216,16 @@ class IncidentSummaryExtension implements iBackofficeStyleExtension, iBackoffice
             function (EventData $oEventData) {
                 $oObject = $oEventData->Get('object');
                 IncidentSummaryHelper::HandleObjectChange($oObject);
-            }
+            },
+            null,
+            0,
+            'incident-summary'
         );
     }
 
+    /**
+     * Back-office CSS — highlights open_incident_count in red when greater than zero.
+     */
     public function GetStyle(): string
     {
         return <<<'CSS'
@@ -161,6 +239,9 @@ class IncidentSummaryExtension implements iBackofficeStyleExtension, iBackoffice
 CSS;
     }
 
+    /**
+     * Back-office JavaScript — adds the CSS class when open_incident_count > 0.
+     */
     public function GetReadyScript(): string
     {
         return <<<'JS'
