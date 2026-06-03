@@ -1,6 +1,6 @@
 # incident-summary
 
-`incident-summary` is a custom iTop extension that adds incident summary fields to Configuration Items and integrates optional AI-powered incident analysis through n8n and Groq.
+`incident-summary` is a custom iTop extension that adds incident summary fields to Configuration Items (CIs).
 
 The extension is implemented as a standalone iTop module and does not modify any iTop core files.
 
@@ -22,62 +22,32 @@ The extension adds calculated incident summary fields to:
 
 The counter is automatically recalculated when:
 
-- an incident is created;
-- an incident is updated;
-- an incident is resolved or closed;
-- an incident is deleted;
-- a CI is linked to or unlinked from a ticket.
+- an incident is created
+- an incident is updated
+- an incident is resolved or closed
+- an incident is deleted
+- a CI is linked or unlinked from a ticket
 
-An incident is considered open when its status is different from:
-
-- `resolved`
-- `closed`
-
-### AI Incident Analysis
-
-The extension also adds one field to the `Incident` class:
-
-| Field | Type | Description |
-|---|---|---|
-| `ai_analysis` | `AttributeText` | Full AI-generated incident analysis returned by n8n |
-
-When an incident is created or updated, iTop sends the incident ID to an n8n webhook.  
-The n8n workflow retrieves the incident details through the iTop REST API, sends the context to Groq, and writes the generated analysis back into the `ai_analysis` field.
-
-### Visual Highlighting
-
-When `open_incident_count` is greater than zero, the value is highlighted in red in the iTop back-office interface.
+An incident is considered open when its status is different from `resolved` or `closed`.
 
 ---
 
 ## Architecture
 
 ```text
-iTop Extension
+iTop EventService
     |
-    | Object lifecycle hooks
+    | DB lifecycle events
+    v
+IncidentSummaryExtension
+    |
+    | Dispatch object change
     v
 IncidentSummaryHelper
     |
     | OQL queries
     v
-Update CI summary fields
-    |
-    | HTTP POST incident_id
-    v
-n8n Webhook
-    |
-    | iTop REST API - GET Incident
-    v
-Groq LLM API
-    |
-    | AI response
-    v
-n8n
-    |
-    | iTop REST API - UPDATE Incident
-    v
-Incident.ai_analysis
+Recalculate CI incident summary fields
 ```
 
 ---
@@ -87,223 +57,77 @@ Incident.ai_analysis
 ```text
 incident-summary/
 ├── datamodel.incident-summary.xml
-├── main.incident-summary.php
 ├── model.incident-summary.php
+├── main.incident-summary.php
 ├── module.incident-summary.php
-├── itop-incident-ai.json
+├── dictionaries/
+│   ├── de.dict.incident-summary.php
+│   ├── en.dict.incident-summary.php
+│   └── fr.dict.incident-summary.php
 └── README.md
 ```
 
 | File | Description |
 |---|---|
 | `module.incident-summary.php` | iTop module declaration |
-| `datamodel.incident-summary.xml` | Datamodel extensions for `Server`, `ApplicationSolution`, and `Incident` |
-| `main.incident-summary.php` | Business logic for recalculation and n8n notification |
-| `model.incident-summary.php` | iTop lifecycle hooks and UI highlighting |
-| `itop-incident-ai.json` | Exported n8n workflow |
+| `datamodel.incident-summary.xml` | Datamodel extensions for `Server` and `ApplicationSolution` |
+| `model.incident-summary.php` | iTop datamodel placeholder |
+| `main.incident-summary.php` | Business logic and lifecycle hooks |
+| `dictionaries/` | Translations (DE / EN / FR) |
 | `README.md` | Project documentation |
 
 ---
 
 ## Requirements
 
-### iTop
-
 - iTop 3.x
 - Apache 2.4+
 - PHP 8.x
-- MySQL or MariaDB
+- MySQL / MariaDB
 - iTop modules:
   - `itop-config-mgmt`
   - `itop-incident-mgmt-itil`
-
-### AI Integration
-
-- n8n
-- Groq API key
-- iTop REST API user with sufficient permissions
 
 ---
 
 ## Installation
 
-### 1. Copy the Extension
-
-Copy the module into the iTop `extensions` directory:
+### 1. Copy the extension
 
 ```bash
 cp -r incident-summary /var/www/html/itop/extensions/
 ```
 
-Expected path:
-
-```text
-/var/www/html/itop/extensions/incident-summary
-```
-
----
-
-### 2. Run the iTop Setup Wizard
-
-Make the iTop configuration file writable:
+### 2. Run the iTop setup wizard
 
 ```bash
-sudo chmod 664 /var/www/html/itop/conf/production/config-itop.php
+chmod 664 /var/www/html/itop/conf/production/config-itop.php
 ```
 
-Open the setup wizard:
-
-```text
-http://localhost/itop/setup
-```
-
-Choose:
-
-```text
-Upgrade an existing iTop instance
-```
-
-Select the module:
-
-```text
-Incident Summary
-```
-
-Complete the setup wizard.
-
-After the setup is complete:
-
-```bash
-sudo chmod 444 /var/www/html/itop/conf/production/config-itop.php
-sudo rm -rf /var/www/html/itop/data/cache/*
-sudo service apache2 restart
-```
+Open `http://localhost/itop/setup`, choose **Upgrade an existing iTop instance** and select **Incident Summary**.
 
 ---
 
-## Configuration
+## How it works
 
-### n8n Webhook URL
+### Event-driven recalculation
 
-The webhook URL is configured in `main.incident-summary.php`:
+The module uses iTop EventService:
 
-```php
-$sUrl = 'http://YOUR_N8N_HOST:5678/webhook/itop-incident-ai';
-```
+- Incident changes → update all linked CIs
+- CI-ticket link changes → update specific CI
 
-If iTop runs in WSL and n8n runs on Windows, do not use `localhost`.
+### OQL logic
 
-Find the Windows host IP from WSL:
-
-```bash
-cat /etc/resolv.conf | grep nameserver
-```
-
-Example:
-
-```text
-nameserver 172.19.240.1
-```
-
-Then configure:
-
-```php
-$sUrl = 'http://172.19.240.1:5678/webhook/itop-incident-ai';
-```
-
-After changing the PHP file, run the iTop setup wizard again in upgrade mode.
-
----
-
-### n8n Workflow
-
-Import the exported workflow into n8n:
-
-```text
-itop-incident-ai.json
-```
-
-In n8n:
-
-1. Open n8n.
-2. Import the workflow from `itop-incident-ai.json`.
-3. Configure the iTop credentials.
-4. Configure the Groq API key.
-5. Publish the workflow.
-
-Production webhook URL:
-
-```text
-http://localhost:5678/webhook/itop-incident-ai
-```
-
-Test webhook URL:
-
-```text
-http://localhost:5678/webhook-test/itop-incident-ai
-```
-
-The PHP integration must use the production URL.
-
----
-
-## Security
-
-Do not commit secrets to the repository.
-
-The following values must not be stored in source code:
-
-- Groq API keys;
-- iTop passwords;
-- n8n credentials;
-- access tokens.
-
-Configure credentials directly in n8n or through environment variables.
-
----
-
-## How It Works
-
-### Lifecycle Hooks
-
-The extension uses iTop object lifecycle hooks:
-
-```php
-OnDBInsert($oObject)
-OnDBUpdate($oObject)
-OnDBDelete($oObject)
-```
-
-Each hook calls:
-
-```php
-IncidentSummaryHelper::HandleObjectChange($oObject)
-```
-
-The helper dispatches the logic based on the object class.
-
----
-
-### Triggered Objects
-
-| Object | Action |
-|---|---|
-| `Incident` | Recalculate linked CIs and notify n8n |
-| `lnkFunctionalCIToTicket` | Recalculate the linked CI |
-
----
-
-### OQL Queries
-
-Find all CIs linked to an incident:
+Linked CIs for incident:
 
 ```sql
-SELECT FunctionalCI AS ci
-JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = ci.id
+SELECT FunctionalCI
+JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = FunctionalCI.id
 WHERE l.ticket_id = :ticket_id
 ```
 
-Count open incidents linked to a CI:
+Open incidents per CI:
 
 ```sql
 SELECT Incident AS i
@@ -315,124 +139,41 @@ AND i.status != 'closed'
 
 ---
 
-## iTop REST API Usage
+## UI Feature
 
-The n8n workflow uses the iTop REST API endpoint:
-
-```text
-POST /itop/webservices/rest.php?version=1.3
-```
-
-### Read Incident
-
-```json
-{
-  "operation": "core/get",
-  "class": "Incident",
-  "key": "SELECT Incident WHERE id = 1",
-  "output_fields": "id,ref,title,description,status,start_date"
-}
-```
-
-### Update Incident
-
-```json
-{
-  "operation": "core/update",
-  "class": "Incident",
-  "key": "SELECT Incident WHERE id = 1",
-  "fields": {
-    "ai_analysis": "AI-generated analysis"
-  },
-  "comment": "AI analysis generated automatically by n8n"
-}
-```
+When `open_incident_count` is greater than zero, the value is highlighted in red in the iTop back-office.
 
 ---
 
 ## Testing
 
-### Verify PHP Syntax
-
 ```bash
-cd /var/www/html/itop/extensions/incident-summary
-
 php -l module.incident-summary.php
 php -l model.incident-summary.php
 php -l main.incident-summary.php
-```
-
-### Verify XML Syntax
-
-```bash
 xmllint --noout datamodel.incident-summary.xml
 ```
 
-### Verify Database Fields
+---
 
-```bash
-sudo mysql itop -e "SHOW COLUMNS FROM server LIKE 'open_incident_count';"
-sudo mysql itop -e "SHOW COLUMNS FROM server LIKE 'last_incident_date';"
-sudo mysql itop -e "SHOW COLUMNS FROM ticket LIKE 'ai_analysis';"
-```
+## Security
 
-### Test Incident Counter
-
-1. Open a `Server`.
-2. Create or update an incident.
-3. Link the incident to the server.
-4. Verify that `open_incident_count` increases.
-5. Resolve the incident.
-6. Verify that `open_incident_count` decreases.
-
-Example SQL check:
-
-```bash
-sudo mysql itop -e "SELECT id, name, open_incident_count, last_incident_date FROM server WHERE name = 'Server1';"
-```
-
-### Test AI Analysis
-
-1. Publish the n8n workflow.
-2. Create or update an incident in iTop.
-3. Verify that n8n receives the webhook call.
-4. Verify that the workflow completes successfully.
-5. Refresh the incident page in iTop.
-6. Verify that `ai_analysis` is populated.
+- No external services
+- No API keys
+- No webhooks
+- No AI integration
+- Fully offline iTop extension
 
 ---
 
 ## Design Decisions
 
-| Decision | Rationale |
+| Choice | Reason |
 |---|---|
-| Standalone iTop module | Keeps the extension upgrade-safe |
-| No core modification | Preserves iTop maintainability |
-| `ApplicationSolution` as second class | Applications can also be impacted by incidents |
-| OQL instead of raw SQL | Uses iTop’s data model abstraction |
-| Single `ai_analysis` field | Keeps the incident description unchanged |
-| n8n orchestration | Provides a visual and maintainable workflow |
-| Groq LLM API | Provides fast AI inference |
-| Short HTTP timeout | Prevents iTop from being blocked if n8n is unavailable |
-
----
-
-## Known Limitations
-
-- The n8n webhook URL must be adapted to the local environment.
-- If n8n updates the same incident, the iTop hook can trigger another webhook call.
-- In a production setup, loop prevention should be added.
-- Secrets must be managed outside the repository.
-
----
-
-## Future Improvements
-
-- Add loop prevention when `ai_analysis` is updated by n8n.
-- Move the webhook URL to a configurable module setting.
-- Add a dedicated AI analysis timestamp field.
-- Add better error logging for failed n8n calls.
-- Add unit or integration tests for the recalculation logic.
+| EventService hooks | Modern iTop 3.x standard |
+| OQL queries | iTop-native data access |
+| No external services | Simplicity and stability |
+| Minimal CI updates | Performance optimization |
 
 ---
 
