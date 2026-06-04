@@ -34,35 +34,24 @@ class IncidentSummaryHelper
      *
      * @param mixed $oObject The iTop object that has been inserted, updated or deleted.
      */
-    public static function HandleObjectChange($oObject): void // itop ruft diese funktion wenn ein objekt geändert oder gelöcht ist
+    public static function HandleObjectChange(mixed $oObject): void
     {
         if ($oObject === null) {
             return;
         }
 
-        $sClass = get_class($oObject); // ob ein Server oder lnkFunctionalCIToTicket
+        $sClass = get_class($oObject);
 
-        /*
-         * Case 1:
-         * An incident has been created, updated, resolved, closed or deleted.
-         * In this case, all CIs linked to this incident must be recalculated.
-         */
         if ($sClass === 'Incident') {
-            self::UpdateLinkedCIsForIncident($oObject->GetKey()); // get the id of the incident und ruft alle verknüpften CIs die mit diese Incident verbunden sind und ruft updateLinked.. um zu berchnen
+            self::UpdateLinkedCIsForIncident($oObject->GetKey());
             return;
         }
 
-        /*
-         * Case 2:
-         * A relation between a ticket and a configuration item has changed.
-         * This happens when a CI is linked to or unlinked from a ticket.
-         */
         if ($sClass === 'lnkFunctionalCIToTicket') {
-            $iCIId = $oObject->Get('functionalci_id');  // holt die ID des verknüpften CI aus diesem Link
-            self::UpdateCIById($iCIId);  // ruft UpdateCIById auf für diesen CI
+            $iCIId = $oObject->Get('functionalci_id');
+            self::UpdateCIById($iCIId);
         }
     }
-
 
     /**
      * Recalculate all target CIs linked to a given incident.
@@ -78,24 +67,19 @@ class IncidentSummaryHelper
             return;
         }
 
-        /*
-         * OQL query:
-         * Retrieve all FunctionalCIs linked to the given incident.
-         */
         $sOQL = "
-            SELECT FunctionalCI AS ci
-            JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = ci.id
+            SELECT FunctionalCI
+            JOIN lnkFunctionalCIToTicket AS l ON l.functionalci_id = FunctionalCI.id
             WHERE l.ticket_id = :ticket_id
         ";
 
-        $oSearch = DBObjectSearch::FromOQL($sOQL); // bereitet die OQL Abfrage vor
+        $oSearch = DBObjectSearch::FromOQL($sOQL);
         $oSet = new DBObjectSet($oSearch, array(), array(
             'ticket_id' => $iIncidentId,
-        ));  // führt die Abfrage aus, die Ergebnisse sind bereit aber noch nicht gelesen
-
+        ));
 
         while ($oCI = $oSet->Fetch()) {
-            self::UpdateCI($oCI); // liest jeden CI die verknüpft mit incident ist  einzeln
+            self::UpdateCI($oCI);
         }
     }
 
@@ -106,7 +90,7 @@ class IncidentSummaryHelper
      *
      * @param mixed $iCIId Identifier of the FunctionalCI.
      */
-    private static function UpdateCIById($iCIId): void
+    private static function UpdateCIById(mixed $iCIId): void
     {
         if (empty($iCIId)) {
             return;
@@ -140,7 +124,7 @@ class IncidentSummaryHelper
      *
      * @param mixed $oCI The CI object to recalculate.
      */
-    private static function UpdateCI($oCI): void
+    private static function UpdateCI(mixed $oCI): void
     {
         if ($oCI === null) {
             return;
@@ -148,23 +132,12 @@ class IncidentSummaryHelper
 
         $sClass = get_class($oCI);
 
-        /*
-         * Ignore all CI classes that are not part of the exercise scope.
-         */
         if (!in_array($sClass, self::$aTargetClasses, true)) {
             return;
         }
 
         $iCIId = $oCI->GetKey();
 
-        /*
-         * OQL query:
-         * Retrieve all open incidents linked to the current CI.
-         *
-         * Closed incidents are excluded with:
-         * - status != resolved
-         * - status != closed
-         */
         $sOQL = "
             SELECT Incident AS i
             JOIN lnkFunctionalCIToTicket AS l ON l.ticket_id = i.id
@@ -181,14 +154,9 @@ class IncidentSummaryHelper
         $iCount = 0;
         $sLastIncidentDate = null;
 
-        /*
-         * Count open incidents and keep the latest incident start date.
-         */
         while ($oIncident = $oSet->Fetch()) {
             $iCount++;
-
             $sDate = $oIncident->Get('start_date');
-
             if (!empty($sDate)) {
                 if ($sLastIncidentDate === null || $sDate > $sLastIncidentDate) {
                     $sLastIncidentDate = $sDate;
@@ -198,25 +166,16 @@ class IncidentSummaryHelper
 
         $bChanged = false;
 
-        /*
-         * Update the incident counter only if the value has changed.
-         */
         if ($oCI->Get('open_incident_count') != $iCount) {
             $oCI->Set('open_incident_count', $iCount);
             $bChanged = true;
         }
 
-        /*
-         * Update the latest incident date only if the value has changed.
-         */
         if ($oCI->Get('last_incident_date') != $sLastIncidentDate) {
             $oCI->Set('last_incident_date', $sLastIncidentDate);
             $bChanged = true;
         }
 
-        /*
-         * Avoid unnecessary database updates.
-         */
         if ($bChanged) {
             $oCI->DBUpdate();
         }
@@ -226,48 +185,46 @@ class IncidentSummaryHelper
 /**
  * iTop extension class for the incident-summary module.
  *
- * This class connects the module to iTop lifecycle hooks.
- * It also provides the optional UI bonus:
- * highlighting the open incident counter in red when its value is greater than zero.
+ * Uses the iTop 3.x EventService mechanism instead of the legacy
+ * AbstractApplicationObjectExtension for object lifecycle hooks.
+ * As recommended by the iTop documentation, EVENT_DB_ABOUT_TO_DELETE
+ * is used instead of EVENT_DB_AFTER_DELETE.
  */
-class IncidentSummaryExtension extends AbstractApplicationObjectExtension implements iBackofficeStyleExtension, iBackofficeReadyScriptExtension
+class IncidentSummaryExtension implements iBackofficeStyleExtension, iBackofficeReadyScriptExtension
 {
     /**
-     * Called by iTop after an object has been inserted in the database.
-     *
-     * The changed object is passed to the helper class in order to recalculate
-     * the incident summary when needed.
+     * Register the EventService listeners for object lifecycle events.
+     * Called once during iTop startup.
      */
-    public function OnDBInsert($oObject, $oChange = null)
+    public static function RegisterListeners(): void
     {
-        IncidentSummaryHelper::HandleObjectChange($oObject);
+        EventService::RegisterListener(
+            EVENT_DB_AFTER_WRITE,
+            function (EventData $oEventData) {
+                $oObject = $oEventData->Get('object');
+                IncidentSummaryHelper::HandleObjectChange($oObject);
+            },
+            null,
+            0,
+            'incident-summary'
+        );
+
+        // EVENT_DB_ABOUT_TO_DELETE recommended over EVENT_DB_AFTER_DELETE
+        // because the object data is still available at this point
+        EventService::RegisterListener(
+            EVENT_DB_ABOUT_TO_DELETE,
+            function (EventData $oEventData) {
+                $oObject = $oEventData->Get('object');
+                IncidentSummaryHelper::HandleObjectChange($oObject);
+            },
+            null,
+            0,
+            'incident-summary'
+        );
     }
 
     /**
-     * Called by iTop after an object has been updated in the database.
-     *
-     * This is used for example when an incident status changes to resolved or closed.
-     */
-    public function OnDBUpdate($oObject, $oChange = null)
-    {
-        IncidentSummaryHelper::HandleObjectChange($oObject);
-    }
-
-    /**
-     * Called by iTop after an object has been deleted from the database.
-     *
-     * This allows the module to recalculate counters when an incident or a link
-     * between an incident and a CI is removed.
-     */
-    public function OnDBDelete($oObject, $oChange = null)
-    {
-        IncidentSummaryHelper::HandleObjectChange($oObject);
-    }
-
-    /**
-     * Back-office CSS used for the visual bonus.
-     *
-     * The CSS class is added by JavaScript only when open_incident_count > 0.
+     * Back-office CSS — highlights open_incident_count in red when greater than zero.
      */
     public function GetStyle(): string
     {
@@ -283,10 +240,7 @@ CSS;
     }
 
     /**
-     * Back-office JavaScript used for the visual bonus.
-     *
-     * The script searches for the open_incident_count field in the displayed page.
-     * If the value is greater than zero, it adds a CSS class to make the value red.
+     * Back-office JavaScript — adds the CSS class when open_incident_count > 0.
      */
     public function GetReadyScript(): string
     {
@@ -322,3 +276,10 @@ CSS;
 JS;
     }
 }
+
+// Register EventService listeners for CRUD events
+IncidentSummaryExtension::RegisterListeners();
+
+// Register UI extensions for CSS and JavaScript
+MetaModel::RegisterExtension('iBackofficeStyleExtension', new IncidentSummaryExtension());
+MetaModel::RegisterExtension('iBackofficeReadyScriptExtension', new IncidentSummaryExtension());
